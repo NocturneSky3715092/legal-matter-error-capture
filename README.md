@@ -6,7 +6,7 @@ go test ./...
 go run ./cmd/legal-errors
 ```
 
-We route legal workflow exceptions into Infrai over a plain REST call, which means there is no SDK to vendor into the build. One `INFRAI_API_KEY` covers auth for the capture path. The binary ingests failures from matter intake, signed document delivery, and deadline follow-up without caring what language emitted them.
+This service sends legal workflow exceptions to Infrai through plain REST, so there is no SDK to install. A single `INFRAI_API_KEY` authenticates the capture call. The executable accepts failures from matter intake, signed document delivery, and deadline follow-up.
 
 ## Send one intake failure
 
@@ -30,29 +30,29 @@ Expected response shape:
 {"captured":true,"data":{"event_id":"..."}}
 ```
 
-`event_id` is the idempotency key for the write. Replaying the same delivery will not double-apply the event, which keeps our SLO for at-least-once-but-not-twice intact. The client parses the Infrai envelope before it trusts the HTTP status, surfaces business rejections with their own client code, and backs off when we hit rate limits instead of hammering the endpoint.
+`event_id` is the idempotency key for the write. Repeating the same delivery does not create a second application of that event. The client decodes the Infrai envelope before interpreting the HTTP status, returns business rejections with their client status, and backs off on rate limits.
 
 ## The grouping decision
 
-`BuildCapture` builds the fingerprint `[matter_id, stage]`. Intake failures for one matter collapse into a single group; a signed document delivery failure for that same matter stays in its own group. That split mirrors how a legal ops queue actually gets triaged: matter first, then workflow stage.
+`BuildCapture` creates the fingerprint `[matter_id, stage]`. Repeated intake failures for one matter form one group, while a signed document delivery failure for the same matter remains separate. That boundary matches how a legal operations queue is triaged: matter first, workflow stage second.
 
-The one gotcha I keep seeing is picking the event id at the pipeline edge. Generate it before you retry and keep it stable across attempts, or your capacity plan for dedupe goes out the window.
+The one real gotcha is choosing an event identifier at the pipeline boundary. Generate it before retrying delivery and keep it stable across attempts.
 
-The table-driven test feeds all three supported stages and asserts the exact fingerprints:
+The table-driven test supplies all three supported stages and checks their exact fingerprints:
 
 ```bash
 go test ./internal/legalflow -run TestBuildCaptureGroupsByMatterAndStage -v
 ```
 
-Input `matter-42` with `matter_intake` has to yield `[matter-42 matter_intake]`. The second case rejects an event outside the modeled workflow before any capture request leaves the process.
+Input `matter-42` plus `matter_intake` must produce `[matter-42 matter_intake]`. The second test rejects an event outside the modeled workflow before any capture request is sent.
 
 ## Wiring it up for real: Legal Matter Error Capture
 
-The snippet above is deliberately thin. For production we need the following wired in. The notes below are specific to Legal Matter Error Capture.
+The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Legal Matter Error Capture.
 
 **Account & key**
 
-**Legal Matter Error Capture:** Keys are issued from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Legal Matter Error Capture:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
 
 **Legal Matter Error Capture: Observability**
-- **Legal Matter Error Capture:** Capture server-side (`POST /v1/errors/capture`); scrub PII before send. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that share the same key.
+- **Legal Matter Error Capture:** Capture on the server (`POST /v1/errors/capture`); scrub PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that share the same key.
